@@ -1,0 +1,8 @@
+﻿saved_models/
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+dist/
+*.pkl
+*.pt
