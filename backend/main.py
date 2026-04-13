@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional, List
 import numpy as np
-import uvicorn
+import uvicorn #fastapi
 import logging
 import time
 
