@@ -63,22 +63,29 @@ jobs:
         run: |
           cd backend
           python -c "
-          from models.risk_model import EnsembleRiskPredictor
-          predictor = EnsembleRiskPredictor()
-          predictor.train()
-          result = predictor.predict({
-            'test_coverage': 42, 'code_coverage': 35, 'branch_coverage': 28,
-            'past_defects_total': 20, 'critical_defects': 5,
-            'defect_resolution_rate': 50, 'cyclomatic_complexity': 25,
-            'lines_of_code_changed': 14000, 'num_contributors': 18,
-            'build_success_rate': 65, 'avg_pr_review_time_hours': 90,
-            'open_issues': 110,
-            'release_notes': 'Major rewrite, breaking changes, emergency migration'
-          })
-          print(f'Risk score: {result[\"risk_score\"]} | Level: {result[\"risk_level\"]} | Confidence: {result[\"confidence\"]}')
-          assert result['risk_score'] > 50, 'Expected HIGH/CRITICAL for this payload'
-          print('ML ensemble prediction OK')
-          "
+          import sys
+          sys.path.insert(0,'.')
+          from models.risk_model import RiskPredictor
+          #Instantiate -will train from scratch since no saved models in CI
+          print('Training ensemble (first run)...')
+          predictor = RiskPredictor()
+          # Run a high-risk prediction
+          from main import ReleaseMetrics
+          metrics = ReleaseMetrics(
+          package_name='payment-gateway', version='4.0.0',
+          test_coverage=42, code_coverage=35, branch_coverage=28,
+          past_defects_total=20, critical_defects=5,
+          defect_resolution_rate=50, cyclomatic_complexity=25,
+          lines_of_code_changed=14000, num_contributors=18,
+          build_success_rate=65, avg_pr_review_time_hours=90,
+          open_issues=110,
+          release_notes='Major rewrite, breaking changes, emergency migration'
+          )
+       result = predictor.predict(metrics)
+       print(f'Risk score:{result[\"risk_score\"]} | Level: {result[\"risk_level\"]} | Confidence: {result[\"confidence\"]}')
+       assert result['risk_score'] > 50, f'Expected HIGH/CRITICAL, got {result[\"risk_score\"]}'
+       print('ML ensemble smoke test PASSED')
+       "
 
   # ── Job 2: Frontend (React / Vite) ───────────────────────────────────────
   frontend:
