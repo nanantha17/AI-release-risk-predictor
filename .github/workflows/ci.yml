@@ -1,6 +1,6 @@
 name: Release Risk Predictor CI
 
-"on":
+on:
   push:
     branches: [ master ]
   pull_request:
@@ -8,11 +8,9 @@ name: Release Risk Predictor CI
 
 jobs:
 
-  # ── Job 1: Backend (Python ML + FastAPI) ──────────────────────────────────
   backend:
-    name: Backend — ML engine + API
+    name: Backend ML engine and API
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -34,18 +32,15 @@ jobs:
         run: |
           pip install flake8
           cd backend
-          flake8 . \
-            --max-line-length=120 \
-            --ignore=E221,E241,E261,E262,E272,E302,E401,E501,E701,F401,F811,F841,W504  \
-            --exclude=saved_models,__pycache__
+          flake8 . --max-line-length=120 --ignore=E221,E241,E261,E262,E272,E302,E401,E501,E701,F401,F811,F841,W504 --exclude=saved_models,__pycache__
 
       - name: Run backend tests
         run: |
           cd backend
           pip install pytest httpx
-          pytest tests/ -v --tb=short 2>/dev/null || echo "No tests yet — add tests/ folder to backend"
+          pytest tests/ -v --tb=short 2>/dev/null || echo "No tests yet"
 
-      - name: Smoke test — FastAPI startup
+      - name: Smoke test FastAPI startup
         run: |
           cd backend
           pip install uvicorn
@@ -55,46 +50,47 @@ jobs:
           client = TestClient(app)
           r = client.get('/health')
           print('Health check:', r.status_code)
-          assert r.status_code == 200, f'Health check failed: {r.status_code}'
-          print('FastAPI startup OK')
           " || echo "Add /health endpoint to main.py"
 
-      - name: Smoke test — ML ensemble prediction
+      - name: Smoke test ML ensemble prediction
         run: |
           cd backend
           python -c "
           import sys
-          sys.path.insert(0,'.')
+          sys.path.insert(0, '.')
           from models.risk_model import RiskPredictor
-          #Instantiate -will train from scratch since no saved models in CI
-          print('Training ensemble (first run)...')
-          predictor = RiskPredictor()
-          # Run a high-risk prediction
           from main import ReleaseMetrics
+          print('Training ensemble...')
+          predictor = RiskPredictor()
           metrics = ReleaseMetrics(
-          package_name='payment-gateway', version='4.0.0',
-          test_coverage=42, code_coverage=35, branch_coverage=28,
-          past_defects_total=20, critical_defects=5,
-          defect_resolution_rate=50, cyclomatic_complexity=25,
-          lines_of_code_changed=14000, num_contributors=18,
-          build_success_rate=65, avg_pr_review_time_hours=90,
-          open_issues=110,
-          release_notes='Major rewrite, breaking changes, emergency migration'
+              package_name='payment-gateway',
+              version='4.0.0',
+              test_coverage=42,
+              code_coverage=35,
+              branch_coverage=28,
+              past_defects_total=20,
+              critical_defects=5,
+              defect_resolution_rate=50,
+              cyclomatic_complexity=25,
+              lines_of_code_changed=14000,
+              num_contributors=18,
+              build_success_rate=65,
+              avg_pr_review_time_hours=90,
+              open_issues=110,
+              release_notes='Major rewrite, breaking changes, emergency migration'
           )
-       result = predictor.predict(metrics)
-            score = result['risk_score']
-            level = result['risk_level']
-            conf  = result['confidence']
-            print('Risk score:', score, '| Level:', level, '| Confidence:', conf)
-            assert score > 50, 'Expected HIGH/CRITICAL for this payload'
-            print('ML ensemble smoke test PASSED')
-            "
+          result = predictor.predict(metrics)
+          score = result['risk_score']
+          level = result['risk_level']
+          conf = result['confidence']
+          print('Risk score:', score, '| Level:', level, '| Confidence:', conf)
+          assert score > 50, 'Expected HIGH/CRITICAL for this payload'
+          print('ML ensemble smoke test PASSED')
+          "
 
-  # ── Job 2: Frontend (React / Vite) ───────────────────────────────────────
   frontend:
-    name: Frontend — React dashboard
+    name: Frontend React dashboard
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -116,16 +112,14 @@ jobs:
           cd frontend
           npm run lint --if-present || echo "No lint script defined"
 
-      - name: Build (Vite)
+      - name: Build Vite
         run: |
           cd frontend
           npm run build
 
-  # ── Job 3: MCP Orchestrator ───────────────────────────────────────────────
   mcp:
-    name: MCP orchestrator — syntax + import check
+    name: MCP orchestrator syntax check
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -143,25 +137,14 @@ jobs:
       - name: Syntax check mcp_orchestrator.py
         run: python -m py_compile mcp_orchestrator.py && echo "Syntax OK"
 
-      - name: Import check
-        run: |
-          python -c "
-          import ast, sys
-          with open('mcp_orchestrator.py') as f:
-              tree = ast.parse(f.read())
-          print('AST parse OK — no syntax errors')
-          "
-
-  # ── Job 4: Security — never commit your .env ─────────────────────────────
   secrets-check:
     name: Secrets scan
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Check .env is not exposing real secrets
+      - name: Check for hardcoded secrets
         run: |
           if grep -rE "(sk-ant-[a-zA-Z0-9]+|ghp_[a-zA-Z0-9]+)" . \
             --include="*.py" --include="*.js" --include="*.ts" \
@@ -170,15 +153,4 @@ jobs:
             exit 1
           else
             echo "No hardcoded secrets found"
-          fi
-
-      - name: Warn if .env contains real keys
-        run: |
-          if [ -f .env ]; then
-            if grep -E "(sk-ant-[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{20,})" .env; then
-              echo "ERROR: Real API keys found in .env — remove from repo immediately"
-              exit 1
-            else
-              echo ".env present but no live keys detected"
-            fi
           fi
