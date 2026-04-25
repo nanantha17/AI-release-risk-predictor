@@ -82,10 +82,13 @@ jobs:
           release_notes='Major rewrite, breaking changes, emergency migration'
           )
        result = predictor.predict(metrics)
-       print(f'Risk score:{result[\"risk_score\"]} | Level: {result[\"risk_level\"]} | Confidence: {result[\"confidence\"]}')
-       assert result['risk_score'] > 50, f'Expected HIGH/CRITICAL, got {result[\"risk_score\"]}'
-       print('ML ensemble smoke test PASSED')
-       "
+            score = result['risk_score']
+            level = result['risk_level']
+            conf  = result['confidence']
+            print('Risk score:', score, '| Level:', level, '| Confidence:', conf)
+            assert score > 50, 'Expected HIGH/CRITICAL for this payload'
+            print('ML ensemble smoke test PASSED')
+            "
 
   # ── Job 2: Frontend (React / Vite) ───────────────────────────────────────
   frontend:
