@@ -218,20 +218,21 @@ Always be concrete — give the actual numbers, not just "high" or "low"."""
         if response.stop_reason == "tool_use":
             tool_results = []
 
-            for block in response.content:
-                if block.type == "tool_use":
-                    print(f"   Calling: {block.name}")
-                    if block.name == "score_release_risk":
-                        print(f"      Running ML ensemble on extracted metrics...")
-                    
-                    result_text = await execute_tool(session, block.name, block.input)
+            # Fire all tool calls concurrently instead of one at a time
+            tasks = [
+                execute_tool(session, block.name, block.input)
+                for block in tool_calls
+            ]
+            results = await asyncio.gather(*tasks)
 
-                    tool_results.append({
-                        "type":        "tool_result",
-                        "tool_use_id": block.id,
-                        "content":     result_text,
-                    })
-
+            tool_results = [
+                {
+                    "type":        "tool_result",
+                    "tool_use_id": block.id,
+                    "content":     result,
+                }
+                for block, result in zip(tool_calls, results)
+            
             messages.append({"role": "user", "content": tool_results})
 
         else:
@@ -263,7 +264,7 @@ async def main():
     healthy = await check_risk_api_health()
     if not healthy:
         print(f"""
-⚠️  Warning: Risk API not reachable at {RISK_API_URL}
+  Warning: Risk API not reachable at {RISK_API_URL}
    Start it first:
      cd backend
      uvicorn main:app --port 8000
@@ -271,7 +272,7 @@ async def main():
    Continuing anyway — risk scoring will fail until it's running.
 """)
     else:
-        print(f"✅ Risk Predictor API is running at {RISK_API_URL}\n")
+        print(f" Risk Predictor API is running at {RISK_API_URL}\n")
 
     # Connect to GitHub MCP server
     github_server = StdioServerParameters(
