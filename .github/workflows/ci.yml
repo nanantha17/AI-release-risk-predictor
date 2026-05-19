@@ -5,7 +5,9 @@ on:
     branches: [ master ]
   pull_request:
     branches: [ master ]
-
+permissions:
+  contents: read    # explicit — don't leave permissions unset
+  actions: read
 jobs:
 
   backend:
