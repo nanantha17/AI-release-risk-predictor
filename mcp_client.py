@@ -23,7 +23,8 @@ Run:
   GITHUB_TOKEN=ghp_...          ← GitHub Personal Access Token
   RISK_API_URL=http://localhost:8000
 """
-
+import html
+import re
 import asyncio
 import sys
 import os
@@ -46,18 +47,103 @@ RISK_API_URL      = os.getenv("RISK_API_URL", "http://localhost:8000")
 assert ANTHROPIC_API_KEY, "ANTHROPIC_API_KEY missing in .env"
 assert GITHUB_TOKEN,      "GITHUB_TOKEN missing in .env"
 
+# ── API Response Validation ───────────────────────────────────────────────────
+def sanitize_text(raw: str, max_length: int = 2000) -> str:
+    """Sanitize free-text from GitHub before passing to Claude or ML model."""
+    if not isinstance(raw, str):
+        return ""
+    # Truncate
+    raw = raw[:max_length]
+    # Remove control characters
+    raw = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', raw)
+    # Escape HTML
+    raw = html.escape(raw)
+    # Prompt injection prevention
+    for pattern in ['ignore previous instructions', 'ignore all prior',
+                    'system prompt', 'you are now', 'disregard']:
+        raw = re.sub(pattern, '[removed]', raw, flags=re.IGNORECASE)
+    return raw.strip()
+
+
+def validate_risk_payload(payload: dict) -> dict:
+    """
+    Validate and clamp all fields before sending to Risk Predictor ML model.
+    Called inside execute_tool() when tool_name == 'score_release_risk'.
+    """
+    # Numeric range clamps — values outside these are data errors
+    numeric_ranges = {
+        "test_coverage":            (0.0,   100.0),
+        "code_coverage":            (0.0,   100.0),
+        "branch_coverage":          (0.0,   100.0),
+        "past_defects_total":       (0,     10000),
+        "critical_defects":         (0,     1000),
+        "defect_resolution_rate":   (0.0,   100.0),
+        "cyclomatic_complexity":    (0.0,   200.0),
+        "lines_of_code_changed":    (0,     1000000),
+        "num_contributors":         (0,     10000),
+        "build_success_rate":       (0.0,   100.0),
+        "avg_pr_review_time_hours": (0.0,   720.0),  # max 30 days
+        "open_issues":              (0,     100000),
+    }
+
+    cleaned = dict(payload)  # copy — don't mutate original
+
+    for field, (min_val, max_val) in numeric_ranges.items():
+        if field not in cleaned:
+            print(f"   [VALIDATION] Missing field: {field} — using safe default")
+            cleaned[field] = (min_val + max_val) / 2
+            continue
+
+        try:
+            val = float(cleaned[field])
+            clamped = max(min_val, min(max_val, val))
+            if clamped != val:
+                print(f"   [VALIDATION] {field} clamped: {val} → {clamped}")
+            # Preserve int type for integer fields
+            cleaned[field] = int(clamped) if isinstance(min_val, int) else clamped
+        except (TypeError, ValueError) as e:
+            print(f"   [VALIDATION] {field} invalid value '{cleaned[field]}': {e}")
+            cleaned[field] = (min_val + max_val) / 2
+
+    # Sanitize text fields
+    if "release_notes" in cleaned:
+        cleaned["release_notes"] = sanitize_text(
+            cleaned.get("release_notes", ""),
+            max_length=2000
+        )
+
+    if "package_name" in cleaned:
+        # Package name should only contain safe characters
+        cleaned["package_name"] = re.sub(
+            r'[^a-zA-Z0-9\-_./]', '',
+            str(cleaned.get("package_name", "unknown"))
+        )[:100]
+
+    return cleaned
+
+
+
+
+
 # ── Risk Predictor API bridge ─────────────────────────────────────────────────
 
 async def call_risk_api(payload: dict) -> dict:
     """
     Call the local FastAPI /predict endpoint.
-    This bridges the MCP agent to your ML ensemble.
+    Uses explicit timeout and TLS verification.
     """
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(f"{RISK_API_URL}/predict", json=payload)
+    async with httpx.AsyncClient(
+        timeout=30,
+        verify=True,        # explicit TLS verification — never False
+        follow_redirects=False  # don't silently follow redirects
+    ) as client:
+        resp = await client.post(
+            f"{RISK_API_URL}/predict",
+            json=payload,
+            headers={"Content-Type": "application/json"}
+        )
         resp.raise_for_status()
         return resp.json()
-
 
 async def check_risk_api_health() -> bool:
     """Verify the FastAPI backend is running before starting the agent."""
@@ -80,7 +166,14 @@ async def execute_tool(session: ClientSession, tool_name: str, tool_input: dict)
     if tool_name == "score_release_risk":
         # ── Route to your ML engine ──────────────────────────────
         try:
-            result = await call_risk_api(tool_input)
+            validated_input = validate_risk_payload(tool_input)
+            changed = {k: (tool_input.get(k), validated_input[k])
+                       for k in validated_input
+                       if validated_input[k] != tool_input.get(k)}
+            if changed:
+                print(f"   [VALIDATION] Fields modified: {list(changed.keys())}")
+
+            result = await call_risk_api(validated_input)  # use validated, not raw
             return json.dumps(result, indent=2)
         except httpx.ConnectError:
             return json.dumps({
@@ -106,19 +199,22 @@ async def execute_tool(session: ClientSession, tool_name: str, tool_input: dict)
 
 # ── Agentic loop ──────────────────────────────────────────────────────────────
 
-async def run_agent(session: ClientSession, client: anthropic.Anthropic, user_message: str):
+async def run_agent(session: ClientSession,
+                    client: anthropic.Anthropic,
+                    user_message: str):
     """
     Multi-turn agentic loop:
     Claude ↔ GitHub MCP tools ↔ Risk Predictor ML engine
     """
 
-    # ── Fetch available GitHub tools from MCP server ─────────────
+    # ── Fetch available GitHub tools from MCP server ──────────────
     tools_response = await session.list_tools()
     github_tools = [
         {
-            "name":        t.name,
-            "description": t.description or "",
-            "input_schema": t.inputSchema if hasattr(t, "inputSchema") else {"type": "object", "properties": {}}
+            "name":         t.name,
+            "description":  t.description or "",
+            "input_schema": t.inputSchema if hasattr(t, "inputSchema")
+                           else {"type": "object", "properties": {}}
         }
         for t in tools_response.tools
     ]
@@ -127,37 +223,39 @@ async def run_agent(session: ClientSession, client: anthropic.Anthropic, user_me
     risk_tool = {
         "name": "score_release_risk",
         "description": (
-            "Score the release risk of a software patch or repository using an ensemble ML model "
-            "(PyTorch neural net + Gradient Boosting + NLP). "
-            "Call this after gathering GitHub metrics to get a risk score, confidence level, "
-            "top risk factors, and actionable recommendations. "
-            "Map GitHub data to these fields as best you can — use 0 or reasonable defaults for missing values."
+            "Score the release risk of a software patch or repository "
+            "using an ensemble ML model (PyTorch neural net + Gradient "
+            "Boosting + NLP). Call this after gathering GitHub metrics "
+            "to get a risk score, confidence level, top risk factors, "
+            "and actionable recommendations."
         ),
         "input_schema": {
             "type": "object",
             "required": [
                 "package_name", "version",
                 "test_coverage", "code_coverage", "branch_coverage",
-                "past_defects_total", "critical_defects", "defect_resolution_rate",
-                "cyclomatic_complexity", "lines_of_code_changed", "num_contributors",
-                "build_success_rate", "avg_pr_review_time_hours", "open_issues"
+                "past_defects_total", "critical_defects",
+                "defect_resolution_rate", "cyclomatic_complexity",
+                "lines_of_code_changed", "num_contributors",
+                "build_success_rate", "avg_pr_review_time_hours",
+                "open_issues"
             ],
             "properties": {
-                "package_name":             {"type": "string",  "description": "Repo or package name"},
-                "version":                  {"type": "string",  "description": "Version or PR/commit ref"},
-                "test_coverage":            {"type": "number",  "description": "Test coverage % (0-100). Use 70 if unknown."},
-                "code_coverage":            {"type": "number",  "description": "Code coverage % (0-100). Use 70 if unknown."},
-                "branch_coverage":          {"type": "number",  "description": "Branch coverage % (0-100). Use 65 if unknown."},
-                "past_defects_total":       {"type": "integer", "description": "Closed bug issues in last 3 releases"},
-                "critical_defects":         {"type": "integer", "description": "Open issues labelled critical/P0/blocker"},
-                "defect_resolution_rate":   {"type": "number",  "description": "% closed issues vs total (0-100)"},
-                "cyclomatic_complexity":    {"type": "number",  "description": "Avg complexity. Use 10 if unknown."},
-                "lines_of_code_changed":    {"type": "integer", "description": "Total lines added + deleted in this release"},
-                "num_contributors":         {"type": "integer", "description": "Number of unique contributors"},
-                "build_success_rate":       {"type": "number",  "description": "CI pass rate % (0-100). Use 85 if unknown."},
-                "avg_pr_review_time_hours": {"type": "number",  "description": "Avg hours from PR open to merge"},
-                "open_issues":              {"type": "integer", "description": "Total open issues right now"},
-                "release_notes":            {"type": "string",  "description": "Latest commit messages or changelog (optional)"}
+                "package_name":             {"type": "string"},
+                "version":                  {"type": "string"},
+                "test_coverage":            {"type": "number"},
+                "code_coverage":            {"type": "number"},
+                "branch_coverage":          {"type": "number"},
+                "past_defects_total":       {"type": "integer"},
+                "critical_defects":         {"type": "integer"},
+                "defect_resolution_rate":   {"type": "number"},
+                "cyclomatic_complexity":    {"type": "number"},
+                "lines_of_code_changed":    {"type": "integer"},
+                "num_contributors":         {"type": "integer"},
+                "build_success_rate":       {"type": "number"},
+                "avg_pr_review_time_hours": {"type": "number"},
+                "open_issues":              {"type": "integer"},
+                "release_notes":            {"type": "string"}
             }
         }
     }
@@ -165,32 +263,21 @@ async def run_agent(session: ClientSession, client: anthropic.Anthropic, user_me
     all_tools = github_tools + [risk_tool]
 
     # ── System prompt ─────────────────────────────────────────────
-    system_prompt = """You are a Release Risk Intelligence Agent for software engineering teams.
+    system_prompt = """You are a Release Risk Intelligence Agent.
 
 Your workflow when asked about a GitHub repo or PR:
 1. Use GitHub tools to gather: open issues, recent commits, PRs, contributors, CI status
-2. Map the GitHub data to release metrics (LOC changed, open issues, contributors, etc.)
-3. Call score_release_risk with the mapped metrics to get the ML risk score
+2. Map the GitHub data to release metrics
+3. Call score_release_risk with the mapped metrics
 4. Present a clear, actionable risk report:
    - Risk score + level (LOW/MEDIUM/HIGH/CRITICAL)
-   - Top 3 risk factors driving the score
+   - Top 3 risk factors
    - Specific recommendations
    - Go/NoGo recommendation
 
-When mapping GitHub data to risk metrics:
-- lines_of_code_changed: sum of additions + deletions from recent commits
-- num_contributors: count unique authors in recent commits  
-- open_issues: current open issue count
-- critical_defects: issues with labels like bug, critical, P0, blocker
-- past_defects_total: closed bug issues in the last 30 days
-- defect_resolution_rate: (closed issues / total issues) * 100
-- avg_pr_review_time_hours: estimate from PR created_at vs merged_at
-- Use sensible defaults (test_coverage=70, build_success_rate=85) when CI data is unavailable
-
-Always be concrete — give the actual numbers, not just "high" or "low"."""
+Always be concrete — give actual numbers, not just high/low."""
 
     messages = [{"role": "user", "content": user_message}]
-
     print(f"\n Agent thinking...\n")
 
     # ── Agentic loop ──────────────────────────────────────────────
@@ -203,11 +290,9 @@ Always be concrete — give the actual numbers, not just "high" or "low"."""
             messages=messages,
         )
 
-        # Collect assistant message
         messages.append({"role": "assistant", "content": response.content})
 
         if response.stop_reason == "end_turn":
-            # Extract and print final text response
             for block in response.content:
                 if hasattr(block, "text"):
                     print(f"\n{'='*60}")
@@ -215,46 +300,36 @@ Always be concrete — give the actual numbers, not just "high" or "low"."""
                     print(f"{'='*60}\n")
             break
 
-        if response.stop_reason == "tool_use":
-            tool_results = []
+        elif response.stop_reason == "tool_use":
+            tool_calls = [b for b in response.content
+                         if b.type == "tool_use"]
 
-            for block in response.content:
-                if block.type == "tool_use":
-                    print(f"   Calling: {block.name}")
-                    if block.name == "score_release_risk":
-                        print(f"      Running ML ensemble on extracted metrics...")
-                    
-                    result_text = await execute_tool(session, block.name, block.input)
+            for block in tool_calls:
+                print(f"   Calling: {block.name}")
+                if block.name == "score_release_risk":
+                    print(f"      Running ML ensemble...")
 
-                    tool_results.append({
-                        "type":        "tool_result",
-                        "tool_use_id": block.id,
-                        "content":     result_text,
-                    })
+            # Execute all tool calls concurrently
+            tasks = [
+                execute_tool(session, block.name, block.input)
+                for block in tool_calls
+            ]
+            results = await asyncio.gather(*tasks)
+
+            tool_results = [
+                {
+                    "type":        "tool_result",
+                    "tool_use_id": block.id,
+                    "content":     result,
+                }
+                for block, result in zip(tool_calls, results)
+            ]
 
             messages.append({"role": "user", "content": tool_results})
 
         else:
-            # Unexpected stop reason
-            print(f" Unexpected stop_reason: {response.stop_reason}")
+            print(f"Unexpected stop_reason: {response.stop_reason}")
             break
-    # avoids sequential tool execution:
-    if response.stop_reason == "tool_use":
-        tool_calls = [b for b in response.content if b.type == "tool_use"]
-
-        # Execute independent tools in parallel
-        async def execute_one(block):
-            result = await execute_tool(session, block.name, block.input)
-            return {
-                "type": "tool_result",
-                "tool_use_id": block.id,
-                "content": result,
-            }
-
-        # asyncio.gather runs all tool calls concurrently
-        tool_results = await asyncio.gather(*[execute_one(b) for b in tool_calls])
-        messages.append({"role": "user", "content": list(tool_results)})
-
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 async def main():
