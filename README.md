@@ -39,7 +39,12 @@ The end-to-end ML application predicts software release risk using an ensemble o
 ## Dashboard
 
 The dashboard shows a live risk gauge, model ensemble breakdown, and ranked risk factors with recommendations for any package/version being evaluated.
+```
+<img width="775" height="373" alt="image" src="https://github.com/user-attachments/assets/e4739cbc-7540-4cbf-ad1c-0d8457561645" />
 
+<img width="775" height="369" alt="image" src="https://github.com/user-attachments/assets/557757fa-05c3-41d5-bfc3-228479499b83" />
+
+```
 ## How It Works
 
 Feed it your patch/release metrics → get back a risk score, confidence level, ranked risk factors, and actionable recommendations in under 1 second.
@@ -78,36 +83,11 @@ Feed it your patch/release metrics → get back a risk score, confidence level, 
 
 ---
 
-## Architecture
+## Risk Predictor Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│  REACT dashboard                                 │
-│  Risk gauge | Model Breakdown | Factor Attribution│
-└───────────────────────┬───────────────────────────┘
-                         │ POST /predict (json)
-                         ▼
-┌─────────────────────────────────────────────────┐
-│  FAST API + Flask REST API (port 8000)           │
-│  ┌─────────────────────────────────────────────┐ │
-│  │  ENSEMBLE PREDICTOR                          │ │
-│  │  ┌───────────┐ ┌───────────┐ ┌─────────────┐│ │
-│  │  │  PyTorch  │ │  Sklearn  │ │  DistilBERT ││ │
-│  │  │  RiskNet  │ │  Gradient │ │     NLP     ││ │
-│  │  │ (40% wt)  │ │  Boosting │ │  (20% wt)   ││ │
-│  │  │           │ │ (40% wt)  │ │             ││ │
-│  │  └───────────┘ └───────────┘ └─────────────┘│ │
-│  │  ┌─────────────────────────────────────────┐│ │
-│  │  │           RISK EXPLAINER                 ││ │
-│  │  └─────────────────────────────────────────┘│ │
-│  └─────────────────────────────────────────────┘ │
-│  ┌─────────────────────────────────────────────┐ │
-│  │  RULE ENGINE — Checks thresholds             │ │
-│  └─────────────────────────────────────────────┘ │
-└───────────────────────┬───────────────────────────┘
-                         │ Response JSON
-                         ▼
-                  (back to dashboard)
+<img width="879" height="676" alt="image" src="https://github.com/user-attachments/assets/284855b8-a948-43f0-9d09-9c6fa7260aec" />
+
 ```
 
 ---
@@ -271,31 +251,14 @@ Adds a GitHub MCP server with a separate MCP client for interfacing with a Claud
 ### Agentic Architecture
 
 ```
-┌──────┐  Question   ┌─────────────┐
-│ User │────────────▶│ Claude (LLM)│
-│      │◀────────────│ Decides which│
-└──────┘ Final Answer│ tools to call│
-                      └──────┬──────┘
-                  Tool call  │  Tool result
-                             ▼
-                      ┌─────────────┐
-                      │  MCP Client │
-                      │mcp_client.py│
-                      └──┬───────┬──┘
-        Score_release_risk│       │ JSON-RPC stdio
-        (custom tool)     │       │
-                  ┌────────┘       └────────┐
-                  ▼                         ▼
-        ┌──────────────────┐      ┌─────────────────────┐
-        │ Risk Predictor API│      │  GitHub MCP server  │
-        │ FastAPI :8000      │      │ npx @modelcontext-  │
-        │ (from risk model)  │      │ protocol/server-github│
-        └────────────────────┘      └──────────┬───────────┘
-                                                 │ REST API calls
-                                                 ▼
-                                          ┌─────────────┐
-                                          │ GitHub API  │
-                                          └─────────────┘
+<img width="1570" height="838" alt="image" src="https://github.com/user-attachments/assets/a0a3484c-ab99-416a-8674-e96432dcd495" />
+
+```
+
+### Agentic Architecture Signal Flow
+```
+<img width="1768" height="1073" alt="image" src="https://github.com/user-attachments/assets/b3445dad-8a31-4d76-9246-2cfa783f54c1" />
+
 ```
 
 **GitHub tools available:** `list_pull_requests`, `get_pull_request`, `list_commits`, `list_issues`, `get_file_contents`, `search_repos`, `get_commit`, `list_branches`, `create_issue`
