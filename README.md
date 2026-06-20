@@ -40,9 +40,9 @@ The end-to-end ML application predicts software release risk using an ensemble o
 
 The dashboard shows a live risk gauge, model ensemble breakdown, and ranked risk factors with recommendations for any package/version being evaluated.
 
-<img width="775" height="373" alt="image" src="https://github.com/user-attachments/assets/e4739cbc-7540-4cbf-ad1c-0d8457561645" />
 
-<img width="775" height="369" alt="image" src="https://github.com/user-attachments/assets/557757fa-05c3-41d5-bfc3-228479499b83" />
+
+
 
 
 ## How It Works
@@ -63,6 +63,8 @@ Feed it your patch/release metrics → get back a risk score, confidence level, 
   }
 }
 ```
+<img width="1000" height="400" alt="image" src="https://github.com/user-attachments/assets/e4739cbc-7540-4cbf-ad1c-0d8457561645" />
+
 
 **Example: Healthy release**
 
@@ -78,6 +80,9 @@ Feed it your patch/release metrics → get back a risk score, confidence level, 
   }
 }
 ```
+<img width="1000" height="400" alt="image" src="https://github.com/user-attachments/assets/557757fa-05c3-41d5-bfc3-228479499b83" />
+
+
 
 83-point spread between a catastrophic and a healthy release. All three models agree in both directions.
 
@@ -257,7 +262,8 @@ Adds a GitHub MCP server with a separate MCP client for interfacing with a Claud
 
 ### Agentic Architecture Signal Flow
 
-<img width="1768" height="1073" alt="image" src="https://github.com/user-attachments/assets/b3445dad-8a31-4d76-9246-2cfa783f54c1" />
+<img width="1635" height="975" alt="image" src="https://github.com/user-attachments/assets/32dffa95-0433-4607-8875-891824546662" />
+
 
 
 
