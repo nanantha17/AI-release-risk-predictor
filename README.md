@@ -85,10 +85,10 @@ Feed it your patch/release metrics → get back a risk score, confidence level, 
 
 ## Risk Predictor Architecture
 
-```
+
 <img width="879" height="676" alt="image" src="https://github.com/user-attachments/assets/284855b8-a948-43f0-9d09-9c6fa7260aec" />
 
-```
+
 
 ---
 
