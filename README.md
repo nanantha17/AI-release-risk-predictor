@@ -1,6 +1,6 @@
-# AI-Based Release Risk Predictor
+# Agentic AI Program Health System
 
-**Live repo:** https://github.com/nanantha17/AI-release-risk-predictor
+**Live repo:** https://github.com/nanantha17/Agentic-AI-Program-Health-System
 
 An end-to-end AI system that scores the risk brought in by each software patch *before* integration — giving CI/CD pipelines and release managers an early warning signal to act on.
 
